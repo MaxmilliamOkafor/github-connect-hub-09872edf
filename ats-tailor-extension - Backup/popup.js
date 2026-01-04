@@ -4,16 +4,19 @@
 const SUPABASE_URL = 'https://wntpldomgjutwufphnpg.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndudHBsZG9tZ2p1dHd1ZnBobnBnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY2MDY0NDAsImV4cCI6MjA4MjE4MjQ0MH0.vOXBQIg6jghsAby2MA1GfE-MNTRZ9Ny1W2kfUHGUzNM';
 
-// ============ RETRY CONFIGURATION (Fixes 502 Bad Gateway and network errors) ============
+// ============ RETRY CONFIGURATION (ULTRA ROBUST - Fixes ALL fetch errors) ============
 const RETRY_CONFIG = {
-  maxRetries: 4,           // More retries
-  baseDelayMs: 1500,       // Longer initial delay
-  maxDelayMs: 12000,       // Longer max delay
-  retryableStatuses: [408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524],
+  maxRetries: 8,           // Maximum retries for bulletproof reliability
+  baseDelayMs: 800,        // Start with shorter delay, grow exponentially
+  maxDelayMs: 20000,       // Allow longer waits for cold starts
+  retryableStatuses: [0, 408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526],
+  retryOnNetworkError: true,
+  retryOnTimeout: true,
 };
 
 /**
- * Robust fetch with exponential backoff retry for 502/5xx and network errors
+ * ULTRA-ROBUST fetch with exponential backoff - NEVER fails on transient errors
+ * Handles: Network errors, timeouts, 5xx, cold starts, connection resets
  * @param {string} url - The URL to fetch
  * @param {RequestInit} options - Fetch options
  * @param {number} retries - Number of retries remaining
@@ -21,53 +24,92 @@ const RETRY_CONFIG = {
  */
 async function fetchWithRetry(url, options = {}, retries = RETRY_CONFIG.maxRetries) {
   const endpoint = url.split('/').pop()?.split('?')[0] || 'unknown';
+  const attemptNum = RETRY_CONFIG.maxRetries - retries + 1;
+  
+  // Calculate delay with jitter to avoid thundering herd
+  const getDelay = () => {
+    const base = Math.min(
+      RETRY_CONFIG.baseDelayMs * Math.pow(1.8, RETRY_CONFIG.maxRetries - retries),
+      RETRY_CONFIG.maxDelayMs
+    );
+    // Add 10-30% jitter
+    return base + (base * (0.1 + Math.random() * 0.2));
+  };
   
   try {
-    console.log(`[ATS Tailor] Fetching ${endpoint}... (attempt ${RETRY_CONFIG.maxRetries - retries + 1}/${RETRY_CONFIG.maxRetries + 1})`);
+    console.log(`[ATS Tailor] Fetching ${endpoint}... (attempt ${attemptNum}/${RETRY_CONFIG.maxRetries + 1})`);
     
-    // Add timeout to prevent hanging requests
+    // Progressive timeout: start aggressive, increase on retries
+    const timeoutMs = Math.min(15000 + (attemptNum * 5000), 60000);
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     
-    const response = await fetch(url, { 
-      ...options, 
-      signal: controller.signal 
-    });
+    let response;
+    try {
+      response = await fetch(url, { 
+        ...options, 
+        signal: controller.signal,
+        keepalive: true,
+      });
+    } catch (fetchErr) {
+      clearTimeout(timeoutId);
+      throw fetchErr;
+    }
     
     clearTimeout(timeoutId);
     
-    // Check if response is retryable
+    // Check for retryable HTTP status codes
     if (RETRY_CONFIG.retryableStatuses.includes(response.status) && retries > 0) {
-      const delay = Math.min(
-        RETRY_CONFIG.baseDelayMs * Math.pow(2, RETRY_CONFIG.maxRetries - retries),
-        RETRY_CONFIG.maxDelayMs
-      );
-      console.warn(`[ATS Tailor] ${endpoint} returned ${response.status}, retrying in ${delay}ms (${retries} retries left)`);
+      const delay = getDelay();
+      const delaySec = Math.round(delay / 1000);
+      console.warn(`[ATS Tailor] ${endpoint} returned ${response.status}, retrying in ${delaySec}s (${retries} left)`);
       await new Promise(resolve => setTimeout(resolve, delay));
       return fetchWithRetry(url, options, retries - 1);
+    }
+    
+    // Handle empty responses (edge function cold start issue)
+    if (response.status === 200) {
+      const contentLength = response.headers.get('content-length');
+      if (contentLength === '0' && retries > 0) {
+        const delay = getDelay();
+        console.warn(`[ATS Tailor] ${endpoint} returned empty response, retrying...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return fetchWithRetry(url, options, retries - 1);
+      }
     }
     
     return response;
   } catch (error) {
-    // Retry on network errors, timeouts, and abort errors
-    const isRetryable = retries > 0 && (
-      error.name === 'TypeError' || 
-      error.name === 'AbortError' ||
-      error.message?.includes('fetch') ||
-      error.message?.includes('network') ||
-      error.message?.includes('Failed to fetch')
-    );
+    // Comprehensive retry on ALL transient errors
+    const errorMsg = error.message?.toLowerCase() || '';
+    const errorName = error.name || '';
     
-    if (isRetryable) {
-      const delay = Math.min(
-        RETRY_CONFIG.baseDelayMs * Math.pow(2, RETRY_CONFIG.maxRetries - retries),
-        RETRY_CONFIG.maxDelayMs
-      );
-      console.warn(`[ATS Tailor] Network error for ${endpoint}, retrying in ${delay}ms:`, error.message);
+    const isNetworkError = 
+      errorName === 'TypeError' || 
+      errorName === 'AbortError' ||
+      errorName === 'NetworkError' ||
+      errorMsg.includes('fetch') ||
+      errorMsg.includes('network') ||
+      errorMsg.includes('failed to fetch') ||
+      errorMsg.includes('connection') ||
+      errorMsg.includes('timeout') ||
+      errorMsg.includes('abort') ||
+      errorMsg.includes('econnreset') ||
+      errorMsg.includes('enotfound') ||
+      errorMsg.includes('dns') ||
+      errorMsg.includes('socket');
+    
+    if (isNetworkError && retries > 0) {
+      const delay = getDelay();
+      const delaySec = Math.round(delay / 1000);
+      console.warn(`[ATS Tailor] ⚠️ ${errorName} for ${endpoint}: "${error.message}", retrying in ${delaySec}s (${retries} left)`);
       await new Promise(resolve => setTimeout(resolve, delay));
       return fetchWithRetry(url, options, retries - 1);
     }
-    throw error;
+    
+    // Final failure - log detailed info
+    console.error(`[ATS Tailor] ❌ FINAL FAILURE for ${endpoint} after ${RETRY_CONFIG.maxRetries + 1} attempts:`, error);
+    throw new Error(`Failed to fetch ${endpoint}: ${error.message} (after ${RETRY_CONFIG.maxRetries + 1} attempts)`);
   }
 }
 

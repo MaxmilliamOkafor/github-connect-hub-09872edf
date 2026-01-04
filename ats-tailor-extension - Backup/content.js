@@ -11,66 +11,112 @@
   const SUPABASE_URL = 'https://wntpldomgjutwufphnpg.supabase.co';
   const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndudHBsZG9tZ2p1dHd1ZnBobnBnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY2MDY0NDAsImV4cCI6MjA4MjE4MjQ0MH0.vOXBQIg6jghsAby2MA1GfE-MNTRZ9Ny1W2kfUHGUzNM';
   
-  // ============ RETRY CONFIGURATION (Fixes 502 Bad Gateway and network errors) ============
+  // ============ RETRY CONFIGURATION (ULTRA ROBUST - Fixes ALL fetch errors) ============
   const RETRY_CONFIG = {
-    maxRetries: 4,           // More retries for content script
-    baseDelayMs: 1500,       // Longer initial delay
-    maxDelayMs: 12000,       // Longer max delay
-    retryableStatuses: [408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524],
+    maxRetries: 8,           // Maximum retries for bulletproof reliability
+    baseDelayMs: 800,        // Start with shorter delay, grow exponentially
+    maxDelayMs: 20000,       // Allow longer waits for cold starts
+    retryableStatuses: [0, 408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526],
+    retryOnNetworkError: true,
+    retryOnTimeout: true,
   };
 
   /**
-   * Robust fetch with exponential backoff retry for 502/5xx and network errors
+   * ULTRA-ROBUST fetch with exponential backoff - NEVER fails on transient errors
+   * Handles: Network errors, timeouts, 5xx, cold starts, connection resets
    */
   async function fetchWithRetry(url, options = {}, retries = RETRY_CONFIG.maxRetries) {
     const endpoint = url.split('/').pop()?.split('?')[0] || 'unknown';
+    const attemptNum = RETRY_CONFIG.maxRetries - retries + 1;
+    
+    // Calculate delay with jitter to avoid thundering herd
+    const getDelay = () => {
+      const base = Math.min(
+        RETRY_CONFIG.baseDelayMs * Math.pow(1.8, RETRY_CONFIG.maxRetries - retries),
+        RETRY_CONFIG.maxDelayMs
+      );
+      // Add 10-30% jitter
+      return base + (base * (0.1 + Math.random() * 0.2));
+    };
     
     try {
-      console.log(`[ATS Tailor] Fetching ${endpoint}... (${RETRY_CONFIG.maxRetries - retries + 1}/${RETRY_CONFIG.maxRetries + 1})`);
+      console.log(`[ATS Tailor] Fetching ${endpoint}... (attempt ${attemptNum}/${RETRY_CONFIG.maxRetries + 1})`);
       
+      // Progressive timeout: start aggressive, increase on retries
+      const timeoutMs = Math.min(15000 + (attemptNum * 5000), 60000);
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       
-      const response = await fetch(url, { 
-        ...options, 
-        signal: controller.signal 
-      });
+      let response;
+      try {
+        response = await fetch(url, { 
+          ...options, 
+          signal: controller.signal,
+          // Keep connection alive
+          keepalive: true,
+        });
+      } catch (fetchErr) {
+        clearTimeout(timeoutId);
+        throw fetchErr;
+      }
       
       clearTimeout(timeoutId);
       
+      // Check for retryable HTTP status codes
       if (RETRY_CONFIG.retryableStatuses.includes(response.status) && retries > 0) {
-        const delay = Math.min(
-          RETRY_CONFIG.baseDelayMs * Math.pow(2, RETRY_CONFIG.maxRetries - retries),
-          RETRY_CONFIG.maxDelayMs
-        );
-        console.warn(`[ATS Tailor] ${endpoint} returned ${response.status}, retrying in ${delay}ms (${retries} left)`);
-        updateBanner(`Server busy, retrying in ${Math.round(delay/1000)}s...`, 'working');
+        const delay = getDelay();
+        const delaySec = Math.round(delay / 1000);
+        console.warn(`[ATS Tailor] ${endpoint} returned ${response.status}, retrying in ${delaySec}s (${retries} left)`);
+        updateBanner(`⏳ Server busy (${response.status}), retrying in ${delaySec}s...`, 'working');
         await new Promise(resolve => setTimeout(resolve, delay));
         return fetchWithRetry(url, options, retries - 1);
+      }
+      
+      // Handle empty responses (edge function cold start issue)
+      if (response.status === 200) {
+        const contentLength = response.headers.get('content-length');
+        if (contentLength === '0' && retries > 0) {
+          const delay = getDelay();
+          console.warn(`[ATS Tailor] ${endpoint} returned empty response, retrying...`);
+          updateBanner(`⏳ Empty response, retrying...`, 'working');
+          await new Promise(resolve => setTimeout(resolve, delay));
+          return fetchWithRetry(url, options, retries - 1);
+        }
       }
       
       return response;
     } catch (error) {
-      // Retry on network errors, timeouts, and abort errors
-      const isRetryable = retries > 0 && (
-        error.name === 'TypeError' || 
-        error.name === 'AbortError' ||
-        error.message?.includes('fetch') ||
-        error.message?.includes('network') ||
-        error.message?.includes('Failed to fetch')
-      );
+      // Comprehensive retry on ALL transient errors
+      const errorMsg = error.message?.toLowerCase() || '';
+      const errorName = error.name || '';
       
-      if (isRetryable) {
-        const delay = Math.min(
-          RETRY_CONFIG.baseDelayMs * Math.pow(2, RETRY_CONFIG.maxRetries - retries),
-          RETRY_CONFIG.maxDelayMs
-        );
-        console.warn(`[ATS Tailor] Network error for ${endpoint}, retrying in ${delay}ms:`, error.message);
-        updateBanner(`Network issue, retrying in ${Math.round(delay/1000)}s...`, 'working');
+      const isNetworkError = 
+        errorName === 'TypeError' || 
+        errorName === 'AbortError' ||
+        errorName === 'NetworkError' ||
+        errorMsg.includes('fetch') ||
+        errorMsg.includes('network') ||
+        errorMsg.includes('failed to fetch') ||
+        errorMsg.includes('connection') ||
+        errorMsg.includes('timeout') ||
+        errorMsg.includes('abort') ||
+        errorMsg.includes('econnreset') ||
+        errorMsg.includes('enotfound') ||
+        errorMsg.includes('dns') ||
+        errorMsg.includes('socket');
+      
+      if (isNetworkError && retries > 0) {
+        const delay = getDelay();
+        const delaySec = Math.round(delay / 1000);
+        console.warn(`[ATS Tailor] ⚠️ ${errorName} for ${endpoint}: "${error.message}", retrying in ${delaySec}s (${retries} left)`);
+        updateBanner(`⚠️ Network issue, retrying in ${delaySec}s...`, 'working');
         await new Promise(resolve => setTimeout(resolve, delay));
         return fetchWithRetry(url, options, retries - 1);
       }
-      throw error;
+      
+      // Final failure - log detailed info
+      console.error(`[ATS Tailor] ❌ FINAL FAILURE for ${endpoint} after ${RETRY_CONFIG.maxRetries + 1} attempts:`, error);
+      throw new Error(`Failed to fetch ${endpoint}: ${error.message} (after ${RETRY_CONFIG.maxRetries + 1} attempts)`);
     }
   }
   
@@ -862,115 +908,36 @@
     return cvOk && coverOk;
   }
 
-  // ============ SHOW GREEN SUCCESS RIBBON ============
+  // ============ SHOW GREEN SUCCESS INDICATOR (KEEPS ORANGE BANNER VISIBLE) ============
   function showSuccessRibbon() {
-    const existingRibbon = document.getElementById('ats-success-ribbon');
-    if (existingRibbon) return; // Already shown
-
-    const ribbon = document.createElement('div');
-    ribbon.id = 'ats-success-ribbon';
-    ribbon.innerHTML = `
-      <style>
-        #ats-success-ribbon {
-          position: fixed;
-          top: 0;
-          left: 0;
-          right: 0;
-          z-index: 9999999;
-          background: linear-gradient(135deg, #00ff88 0%, #00cc66 50%, #00aa55 100%);
-          padding: 16px 24px;
-          font: bold 16px system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-          color: #000;
-          text-align: center;
-          box-shadow: 0 4px 25px rgba(0, 255, 136, 0.6), 0 2px 10px rgba(0,0,0,0.25);
-          animation: ats-ribbon-pulse 2s ease-in-out infinite;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 14px;
-        }
-        @keyframes ats-ribbon-pulse {
-          0%, 100% { 
-            box-shadow: 0 4px 25px rgba(0, 255, 136, 0.6), 0 2px 10px rgba(0,0,0,0.25);
-            transform: translateY(0);
-          }
-          50% { 
-            box-shadow: 0 6px 40px rgba(0, 255, 136, 0.9), 0 4px 15px rgba(0,0,0,0.35);
-            transform: translateY(-1px);
-          }
-        }
-        #ats-success-ribbon .ats-checkmark {
-          width: 32px;
-          height: 32px;
-          background: rgba(0,0,0,0.15);
-          border-radius: 50%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          animation: ats-checkmark-pop 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
-        }
-        #ats-success-ribbon .ats-checkmark svg {
-          width: 20px;
-          height: 20px;
-          stroke: #000;
-          stroke-width: 3;
-          fill: none;
-          stroke-linecap: round;
-          stroke-linejoin: round;
-          animation: ats-checkmark-draw 0.4s ease-out 0.3s forwards;
-          stroke-dasharray: 24;
-          stroke-dashoffset: 24;
-        }
-        @keyframes ats-checkmark-pop {
-          0% { transform: scale(0); opacity: 0; }
-          50% { transform: scale(1.4); }
-          100% { transform: scale(1); opacity: 1; }
-        }
-        @keyframes ats-checkmark-draw {
-          to { stroke-dashoffset: 0; }
-        }
-        #ats-success-ribbon .ats-text {
-          font-weight: 800;
-          letter-spacing: 0.8px;
-          text-transform: uppercase;
-          animation: ats-text-fade 0.5s ease-out 0.2s forwards;
-          opacity: 0;
-        }
-        @keyframes ats-text-fade {
-          to { opacity: 1; }
-        }
-        #ats-success-ribbon .ats-badge {
-          background: rgba(0,0,0,0.2);
-          padding: 6px 14px;
-          border-radius: 16px;
-          font-size: 13px;
-          font-weight: 700;
-          animation: ats-badge-slide 0.4s ease-out 0.4s forwards;
-          opacity: 0;
-          transform: translateX(10px);
-        }
-        @keyframes ats-badge-slide {
-          to { opacity: 1; transform: translateX(0); }
-        }
-        body.ats-success-ribbon-active { padding-top: 56px !important; }
-      </style>
-      <span class="ats-checkmark">
-        <svg viewBox="0 0 24 24">
-          <polyline points="4 12 10 18 20 6"></polyline>
-        </svg>
-      </span>
-      <span class="ats-text">CV & Cover Letter Attached Successfully</span>
-      <span class="ats-badge">✨ ATS-PERFECT</span>
-    `;
+    // Update the orange banner to show success state instead of replacing it
+    const banner = document.getElementById('ats-auto-banner');
+    if (banner) {
+      banner.classList.add('success');
+      
+      // Update all steps to done
+      const steps = banner.querySelectorAll('.ats-step');
+      steps.forEach((el) => {
+        el.classList.remove('active');
+        el.classList.add('done');
+        const icon = el.querySelector('.ats-step-icon');
+        if (icon) icon.textContent = '✓';
+      });
+      
+      // Update status text
+      const statusEl = document.getElementById('ats-banner-status');
+      if (statusEl) {
+        statusEl.innerHTML = '✅ <strong>CV & Cover Letter Attached Successfully</strong> | ATS-PERFECT';
+      }
+      
+      // Update logo
+      const logo = banner.querySelector('.ats-logo');
+      if (logo) {
+        logo.textContent = '🚀 ATS TAILOR ✅';
+      }
+    }
     
-    document.body.appendChild(ribbon);
-    document.body.classList.add('ats-success-ribbon-active');
-    
-    // Hide the orange banner if it exists
-    const orangeBanner = document.getElementById('ats-auto-banner');
-    if (orangeBanner) orangeBanner.style.display = 'none';
-    
-    console.log('[ATS Tailor] ✅ GREEN SUCCESS RIBBON displayed');
+    console.log('[ATS Tailor] ✅ SUCCESS - Orange banner updated to green success state');
   }
 
   function ultraFastReplace() {
