@@ -285,11 +285,48 @@
           <span class="ats-step-icon">📎</span>
           <span>Attach</span>
         </div>
-      </div>
-      <span class="ats-status" id="ats-banner-status">Detecting upload fields...</span>
-    `;
+        </div>
+        <span class="ats-status" id="ats-banner-status">⚡Tailoring... ~5s</span>
+        <span class="ats-countdown" id="ats-countdown" style="font-weight: 700; color: #fff; background: rgba(0,0,0,0.2); padding: 4px 10px; border-radius: 12px; font-size: 12px;">5s</span>
+      `;
     document.body.appendChild(banner);
     document.body.classList.add('ats-banner-active');
+    
+    // Start countdown timer
+    startBannerCountdown();
+  }
+  
+  // ============ COUNTDOWN TIMER ============
+  let bannerCountdownInterval = null;
+  let bannerCountdownSeconds = 5;
+  
+  function startBannerCountdown() {
+    bannerCountdownSeconds = 5;
+    if (bannerCountdownInterval) clearInterval(bannerCountdownInterval);
+    
+    const countdownEl = document.getElementById('ats-countdown');
+    if (countdownEl) countdownEl.textContent = '5s';
+    
+    bannerCountdownInterval = setInterval(() => {
+      bannerCountdownSeconds = Math.max(0, bannerCountdownSeconds - 1);
+      const countdownEl = document.getElementById('ats-countdown');
+      if (countdownEl) {
+        if (bannerCountdownSeconds > 0) {
+          countdownEl.textContent = `${bannerCountdownSeconds}s`;
+        } else {
+          countdownEl.textContent = '⏳';
+        }
+      }
+    }, 1000);
+  }
+  
+  function stopBannerCountdown() {
+    if (bannerCountdownInterval) {
+      clearInterval(bannerCountdownInterval);
+      bannerCountdownInterval = null;
+    }
+    const countdownEl = document.getElementById('ats-countdown');
+    if (countdownEl) countdownEl.textContent = '✅';
   }
 
   function updateBannerStep(step) {
@@ -313,6 +350,18 @@
       banner.className = type === 'success' ? 'success' : type === 'error' ? 'error' : '';
     }
     if (statusEl) statusEl.textContent = status;
+    
+    // Update countdown based on status
+    const countdownEl = document.getElementById('ats-countdown');
+    if (type === 'success' && countdownEl) {
+      stopBannerCountdown();
+      countdownEl.textContent = '✅';
+      countdownEl.style.background = 'rgba(0,200,100,0.4)';
+    } else if (type === 'error' && countdownEl) {
+      stopBannerCountdown();
+      countdownEl.textContent = '❌';
+      countdownEl.style.background = 'rgba(255,0,0,0.3)';
+    }
     
     // Auto-detect step from status message
     if (status.toLowerCase().includes('detect')) updateBannerStep(0);
@@ -910,7 +959,9 @@
 
   // ============ SHOW GREEN SUCCESS INDICATOR (KEEPS ORANGE BANNER VISIBLE) ============
   function showSuccessRibbon() {
-    // Update the orange banner to show success state instead of replacing it
+    // Stop the countdown and update the orange banner to show success state
+    stopBannerCountdown();
+    
     const banner = document.getElementById('ats-auto-banner');
     if (banner) {
       banner.classList.add('success');
@@ -928,6 +979,13 @@
       const statusEl = document.getElementById('ats-banner-status');
       if (statusEl) {
         statusEl.innerHTML = '✅ <strong>CV & Cover Letter Attached Successfully</strong> | ATS-PERFECT';
+      }
+      
+      // Update countdown to checkmark
+      const countdownEl = document.getElementById('ats-countdown');
+      if (countdownEl) {
+        countdownEl.textContent = '✅';
+        countdownEl.style.background = 'rgba(0,200,100,0.4)';
       }
       
       // Update logo
