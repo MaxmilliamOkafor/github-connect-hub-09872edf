@@ -1774,6 +1774,27 @@ class ATSTailor {
     pipelineSteps?.classList.remove('hidden');
     this.setStatus('Tailoring...', 'working');
 
+    // ============ COUNTDOWN TIMER (estimate ~5-8s total) ============
+    let countdownSeconds = 8;
+    let countdownInterval = null;
+    const startCountdown = (estimatedSeconds) => {
+      countdownSeconds = estimatedSeconds;
+      if (countdownInterval) clearInterval(countdownInterval);
+      countdownInterval = setInterval(() => {
+        countdownSeconds = Math.max(0, countdownSeconds - 1);
+        const stepText = progressText?.textContent?.split('~')[0]?.trim() || '';
+        if (progressText && countdownSeconds > 0) {
+          progressText.textContent = `${stepText} ~${countdownSeconds}s`;
+        }
+      }, 1000);
+    };
+    const stopCountdown = () => {
+      if (countdownInterval) {
+        clearInterval(countdownInterval);
+        countdownInterval = null;
+      }
+    };
+
     const updateProgress = (percent, text) => {
       if (progressFill) progressFill.style.width = `${percent}%`;
       if (progressText) progressText.textContent = text;
@@ -1795,9 +1816,10 @@ class ATSTailor {
     };
 
     try {
-      // ============ STEP 1: AI EXTRACT KEYWORDS (Click "AI Extract Keywords" first) ============
+      // ============ STEP 1: AI EXTRACT KEYWORDS (~2s) ============
       updateStep(1, 'working');
-      updateProgress(5, 'Step 1/3: AI Extracting keywords from job description...');
+      updateProgress(5, '⚡Step 1/3: Extracting keywords... ~2s');
+      startCountdown(2);
 
       await this.refreshSessionIfNeeded();
       if (!this.session?.access_token || !this.session?.user?.id) {
@@ -1831,13 +1853,15 @@ class ATSTailor {
       // Save keywords to history for comparison feature
       await this.saveKeywordsToHistory(keywords);
 
+      stopCountdown();
       updateStep(1, 'complete');
 
-      // ============ STEP 2: Load Profile & Generate Base CV ============
+      // ============ STEP 2: Load Profile & Generate Base CV (~3s) ============
       updateStep(2, 'working');
-      updateProgress(20, 'Step 2/3: Loading profile & generating tailored CV...');
+      updateProgress(20, '⚡Step 2/3: Boosting CV to 95-100% match... ~3s');
+      startCountdown(3);
 
-      // Fetch user profile (API call with retry)
+      // Fetch user profile (API call with retry) - use shorter timeout
       const profileRes = await fetchWithRetry(
         `${SUPABASE_URL}/rest/v1/profiles?user_id=eq.${this.session.user.id}&select=first_name,last_name,email,phone,linkedin,github,portfolio,cover_letter,work_experience,education,skills,certifications,achievements,ats_strategy,city,country,address,state,zip_code`,
         {
@@ -1873,9 +1897,14 @@ class ATSTailor {
       console.log('[ATS Tailor] Step 2 - Profile loaded, generating base CV...');
 
       // Update step text
-      updateProgress(35, 'Step 2/3: AI generating tailored documents...');
+      updateProgress(35, '⚡Step 2/3: AI generating tailored documents... ~2s');
 
-      const response = await fetchWithRetry(`${SUPABASE_URL}/functions/v1/tailor-application`, {
+      // Use Promise.race with timeout to prevent 30-min hangs (max 30s for tailor API)
+      const tailorTimeout = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Tailor API timeout (30s) - please retry')), 30000)
+      );
+      
+      const tailorPromise = fetchWithRetry(`${SUPABASE_URL}/functions/v1/tailor-application`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1911,6 +1940,8 @@ class ATSTailor {
           },
         }),
       });
+      
+      const response = await Promise.race([tailorPromise, tailorTimeout]);
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
@@ -1923,6 +1954,8 @@ class ATSTailor {
 
       const result = await response.json();
       if (result.error) throw new Error(result.error);
+      
+      stopCountdown();
 
       // Save original CV (before local boosting) for coverage report diffing
       this._coverageOriginalCV = result.tailoredResume || '';
@@ -1962,86 +1995,67 @@ class ATSTailor {
       updateStep(2, 'complete');
 
       // ============ STEP 3: GUARANTEED 100% MATCH - No keywords left behind ============
+      // ============ STEP 3: FAST LOCAL BOOST (skip slow API calls) ~2s ============
       updateStep(3, 'working');
-      updateProgress(55, 'Step 3/3: Guaranteeing 100% keyword match...');
+      updateProgress(55, '⚡Step 3/3: Generating ATS CV & Cover Letter... ~2s');
+      startCountdown(2);
 
       const currentScore = this.generatedDocuments.matchScore || 0;
       
-      // ALWAYS boost to 100% - no keywords left unmatched
+      // FAST LOCAL BOOST - no API calls, just local keyword injection
       if (currentScore < 100 && keywords.all?.length > 0) {
         try {
-          let boostResult = await this.boostCVTo95Plus(
-            this.generatedDocuments.cv,
-            keywords,
-            (percent, text) => {
-              updateProgress(55 + (percent * 0.15), `Step 3/3: ${text}`);
-            }
-          );
-
-          // If still not 100%, use aggressive injection
-          if (boostResult.finalScore < 100 && boostResult.missingKeywords?.length > 0) {
-            console.log('[ATS Tailor] Applying final injection for remaining', boostResult.missingKeywords.length, 'keywords');
-            const finalInject = this.fastKeywordInjection(
-              boostResult.tailoredCV || this.generatedDocuments.cv,
+          // Use fast local injection instead of slow API boost
+          const missingKw = this.generatedDocuments.missingKeywords || [];
+          if (missingKw.length > 0) {
+            const localBoost = this.fastKeywordInjection(
+              this.generatedDocuments.cv,
               keywords,
-              boostResult.missingKeywords
+              missingKw
             );
             
-            if (finalInject.tailoredCV) {
-              boostResult.tailoredCV = finalInject.tailoredCV;
-              boostResult.injectedKeywords = [...(boostResult.injectedKeywords || []), ...finalInject.injectedKeywords];
+            if (localBoost.tailoredCV) {
+              this.generatedDocuments.cv = localBoost.tailoredCV;
+              const finalMatch = this.calculateMatchScore(localBoost.tailoredCV, keywords);
+              this.generatedDocuments.matchScore = finalMatch.matchScore;
+              this.generatedDocuments.matchedKeywords = finalMatch.matchedKeywords;
+              this.generatedDocuments.missingKeywords = finalMatch.missingKeywords;
               
-              // Recalculate final score - should now be 100%
-              const finalMatch = this.calculateMatchScore(boostResult.tailoredCV, keywords);
-              boostResult.finalScore = finalMatch.matchScore;
-              boostResult.matchedKeywords = finalMatch.matchedKeywords;
-              boostResult.missingKeywords = finalMatch.missingKeywords;
+              this.updateMatchAnalysisUI();
+              console.log('[ATS Tailor] Step 3 - Local boost complete:', finalMatch.matchScore + '%');
             }
           }
-
-          if (boostResult.tailoredCV) {
-            this.generatedDocuments.cv = boostResult.tailoredCV;
-            this.generatedDocuments.matchScore = boostResult.finalScore;
-            this.generatedDocuments.matchedKeywords = boostResult.matchedKeywords;
-            this.generatedDocuments.missingKeywords = boostResult.missingKeywords;
-            
-            // UPDATE UI: Show final 100% match score
-            this.updateMatchAnalysisUI();
-            
-            console.log('[ATS Tailor] Step 3 - Final score:', boostResult.finalScore + '%', 
-                        'injected:', boostResult.injectedKeywords?.length || 0, 'keywords');
-          }
         } catch (boostError) {
-          console.warn('[ATS Tailor] Boost failed, applying fallback injection:', boostError);
-          // Fallback: aggressive injection
-          const fallbackInject = this.fastKeywordInjection(
-            this.generatedDocuments.cv,
-            keywords,
-            this.generatedDocuments.missingKeywords
-          );
-          if (fallbackInject.tailoredCV) {
-            this.generatedDocuments.cv = fallbackInject.tailoredCV;
-            const finalMatch = this.calculateMatchScore(fallbackInject.tailoredCV, keywords);
-            this.generatedDocuments.matchScore = finalMatch.matchScore;
-            this.generatedDocuments.matchedKeywords = finalMatch.matchedKeywords;
-            this.generatedDocuments.missingKeywords = finalMatch.missingKeywords;
-            this.updateMatchAnalysisUI();
-          }
+          console.warn('[ATS Tailor] Local boost failed:', boostError);
         }
       } else if (currentScore >= 100) {
         console.log('[ATS Tailor] Step 3 - Already at 100%');
       }
 
-      // Build keyword coverage report for debugging (injected locations in CV)
+      // Build keyword coverage report for debugging
       this.buildKeywordCoverageReport(keywords);
 
-      updateProgress(80, 'Step 3/3: Regenerating PDF with boosted CV...');
-
-      // Regenerate PDF with boosted CV and dynamic location
-      if (this.generatedDocuments.cv) {
-        await this.regeneratePDFAfterBoost();
+      // FAST PDF: Only regenerate if we DON'T already have a PDF from the tailor API
+      // This skips the slow regeneratePDFAfterBoost() when unnecessary
+      if (!this.generatedDocuments.cvPdf && this.generatedDocuments.cv) {
+        updateProgress(75, '⚡Step 3/3: Generating PDF... ~1s');
+        
+        // Use timeout to prevent hanging
+        const pdfTimeout = new Promise((resolve) => 
+          setTimeout(() => resolve({ skipped: true }), 10000)
+        );
+        
+        try {
+          await Promise.race([this.regeneratePDFAfterBoost(), pdfTimeout]);
+        } catch (pdfError) {
+          console.warn('[ATS Tailor] PDF regeneration skipped/failed:', pdfError);
+          // Continue without new PDF - we still have the text content
+        }
+      } else {
+        console.log('[ATS Tailor] Step 3 - Using existing PDF from tailor API');
       }
 
+      stopCountdown();
       updateStep(3, 'complete');
 
       // ============ FINAL: Attach CV & Update UI ============
@@ -2085,6 +2099,7 @@ class ATSTailor {
       this.showToast(error.message || 'Failed', 'error');
       this.setStatus('Error', 'error');
     } finally {
+      stopCountdown(); // Always clean up countdown timer
       btn.disabled = false;
       btn.querySelector('.btn-text').textContent = 'Extract & Apply Keywords to CV';
       setTimeout(() => {
