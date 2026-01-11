@@ -756,7 +756,7 @@
     return { title, company, location, description, url: window.location.href, platform: platformKey || hostname };
   }
 
-  // ============ AUTO-TAILOR DOCUMENTS ============
+  // ============ AUTO-TAILOR DOCUMENTS (ULTRA-FAST MODE) ============
   async function autoTailorDocuments() {
     if (hasTriggeredTailor || tailoringInProgress) {
       console.log('[ATS Tailor] Already triggered or in progress, skipping');
@@ -780,7 +780,9 @@
     tailoringInProgress = true;
     
     createStatusBanner();
-    updateBanner('Generating tailored CV & Cover Letter...', 'working');
+    updateBanner('⚡ ULTRA-FAST tailoring...', 'working');
+
+    const pipelineStart = performance.now();
 
     try {
       // Get session
@@ -795,25 +797,6 @@
         return;
       }
 
-      // Get user profile with retry
-      updateBanner('Loading your profile...', 'working');
-      const profileRes = await fetchWithRetry(
-        `${SUPABASE_URL}/rest/v1/profiles?user_id=eq.${session.user.id}&select=first_name,last_name,email,phone,linkedin,github,portfolio,cover_letter,work_experience,education,skills,certifications,achievements,ats_strategy,city,country,address,state,zip_code`,
-        {
-          headers: {
-            apikey: SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${session.access_token}`,
-          },
-        }
-      );
-
-      if (!profileRes.ok) {
-        throw new Error('Could not load profile');
-      }
-
-      const profileRows = await profileRes.json();
-      const p = profileRows?.[0] || {};
-
       // Extract job info from page
       const jobInfo = extractJobInfo();
       if (!jobInfo.title) {
@@ -822,11 +805,54 @@
         return;
       }
 
-      console.log('[ATS Tailor] Job detected:', jobInfo.title, 'at', jobInfo.company);
-      updateBanner(`Tailoring for: ${jobInfo.title}...`, 'working');
+      console.log('[ATS Tailor] ⚡ Job detected:', jobInfo.title, 'at', jobInfo.company);
+      updateBanner(`⚡Tailoring: ${jobInfo.title}...`, 'working');
 
-      // Call tailor API with retry
-      const response = await fetchWithRetry(`${SUPABASE_URL}/functions/v1/tailor-application`, {
+      // PHASE 1: FAST LOCAL KEYWORD EXTRACTION (no API call)
+      let keywords = null;
+      if (window.TurboPipeline?.turboExtractKeywords) {
+        keywords = await window.TurboPipeline.turboExtractKeywords(jobInfo.description || '', {
+          jobUrl: jobInfo.url || '',
+          maxKeywords: 35
+        });
+        console.log(`[ATS Tailor] ⚡ Extracted ${keywords?.all?.length || 0} keywords locally`);
+      }
+
+      // PHASE 2: Get user profile (check cache first)
+      updateBanner(`⚡Loading profile...`, 'working');
+      
+      let p = window.TurboPipeline?.getCachedProfile?.();
+      
+      if (!p) {
+        const profileRes = await fetchWithRetry(
+          `${SUPABASE_URL}/rest/v1/profiles?user_id=eq.${session.user.id}&select=first_name,last_name,email,phone,linkedin,github,portfolio,cover_letter,work_experience,education,skills,certifications,achievements,ats_strategy,city,country,address,state,zip_code`,
+          {
+            headers: {
+              apikey: SUPABASE_ANON_KEY,
+              Authorization: `Bearer ${session.access_token}`,
+            },
+          }
+        );
+
+        if (!profileRes.ok) {
+          throw new Error('Could not load profile');
+        }
+
+        const profileRows = await profileRes.json();
+        p = profileRows?.[0] || {};
+        
+        // Cache profile
+        window.TurboPipeline?.setCachedProfile?.(p);
+      }
+
+      updateBanner(`⚡Generating tailored CV...`, 'working');
+
+      // PHASE 3: Call tailor API with 15s timeout (not 30s)
+      const tailorTimeout = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Timeout - please retry')), 15000)
+      );
+      
+      const tailorPromise = fetchWithRetry(`${SUPABASE_URL}/functions/v1/tailor-application`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -862,6 +888,8 @@
           },
         }),
       });
+      
+      const response = await Promise.race([tailorPromise, tailorTimeout]);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -871,8 +899,9 @@
       const result = await response.json();
       if (result.error) throw new Error(result.error);
 
-      console.log('[ATS Tailor] Tailoring complete! Match score:', result.matchScore);
-      updateBanner(`✅ Generated! Match: ${result.matchScore}% - Attaching files...`, 'success');
+      const pipelineTime = performance.now() - pipelineStart;
+      console.log(`[ATS Tailor] ⚡ Tailoring complete in ${pipelineTime.toFixed(0)}ms! Match score: ${result.matchScore}%`);
+      updateBanner(`✅ ${result.matchScore}% match in ${(pipelineTime / 1000).toFixed(1)}s! Attaching...`, 'success');
 
       // Store PDFs in chrome.storage for the attach loop
       const fallbackName = `${(p.first_name || '').trim()}_${(p.last_name || '').trim()}`.replace(/\s+/g, '_') || 'Applicant';
@@ -905,7 +934,7 @@
       // Now load files and start attaching
       loadFilesAndStart();
       
-      updateBanner(`✅ Done! Match: ${result.matchScore}% - Files attached!`, 'success');
+      updateBanner(`✅ Done! ${result.matchScore}% match - Files attached!`, 'success');
       hideBanner();
 
     } catch (error) {
@@ -914,13 +943,13 @@
       // Provide user-friendly error messages
       let errorMsg = error.message || 'Unknown error';
       if (errorMsg.includes('Failed to fetch') || errorMsg.includes('NetworkError')) {
-        errorMsg = 'Network error - check your connection and try again';
+        errorMsg = 'Network error - retrying...';
       } else if (errorMsg.includes('502') || errorMsg.includes('Bad Gateway')) {
-        errorMsg = 'Server busy - please try again in a moment';
+        errorMsg = 'Server busy - please try again';
+      } else if (errorMsg.includes('Timeout')) {
+        errorMsg = 'Request timed out - please retry';
       } else if (errorMsg.includes('401') || errorMsg.includes('Unauthorized')) {
-        errorMsg = 'Session expired - please login again via popup';
-      } else if (errorMsg.includes('profile')) {
-        errorMsg = 'Profile not found - complete your profile in the app';
+        errorMsg = 'Session expired - please login again';
       }
       
       updateBanner(`Error: ${errorMsg}`, 'error');

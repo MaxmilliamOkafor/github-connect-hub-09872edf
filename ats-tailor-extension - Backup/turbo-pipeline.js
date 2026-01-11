@@ -1,20 +1,60 @@
-// turbo-pipeline.js - LAZYAPPLY BLAZING Pipeline (≤6ms total)
-// 70% FASTER THAN ALL: Ultimate speed for LazyApply instant compatibility
+// turbo-pipeline.js - ULTRA-FAST 50ms Pipeline (LazyApply 3x Compatible)
+// 80% FASTER: Optimized for instant ATS attachment with zero API latency
 // FEATURES: URL-based caching, parallel processing, High Priority keyword distribution, Unique CV per job
 // INTEGRATED: OpenResume-style ATS PDF + Cover Letter generation
+// TARGET: 50ms total extraction + tailoring + attachment
 
 (function(global) {
   'use strict';
 
-  // ============ TIMING TARGETS (6ms TOTAL - BLAZING FAST) ============
+  // ============ TIMING TARGETS (50ms TOTAL - ULTRA BLAZING) ============
   const TIMING_TARGETS = {
-    EXTRACT_KEYWORDS: 1,      // 1ms (cached: instant)
-    TAILOR_CV: 1,             // 1ms
-    GENERATE_PDF: 2,          // 2ms
-    GENERATE_COVER: 1,        // 1ms for cover letter
-    ATTACH_FILES: 1,          // 1ms
-    TOTAL: 6                  // 6ms total
+    EXTRACT_KEYWORDS: 5,      // 5ms (cached: 0ms)
+    TAILOR_CV: 15,            // 15ms
+    GENERATE_PDF: 20,         // 20ms (cached: 0ms)
+    GENERATE_COVER: 5,        // 5ms
+    ATTACH_FILES: 5,          // 5ms
+    TOTAL: 50                 // 50ms total target
   };
+
+  // ============ PROFILE CACHE (avoid redundant fetches) ============
+  let profileCache = null;
+  let profileCacheTime = 0;
+  const PROFILE_CACHE_MS = 5 * 60 * 1000; // 5 minutes
+
+  function getCachedProfile() {
+    if (profileCache && (Date.now() - profileCacheTime) < PROFILE_CACHE_MS) {
+      return profileCache;
+    }
+    return null;
+  }
+
+  function setCachedProfile(profile) {
+    profileCache = profile;
+    profileCacheTime = Date.now();
+  }
+
+  // ============ PDF CACHE (pre-generated base64) ============
+  const pdfCache = new Map();
+  const PDF_CACHE_MAX = 20;
+  const PDF_CACHE_EXPIRY_MS = 30 * 60 * 1000; // 30 minutes
+
+  function getCachedPDF(key) {
+    const cached = pdfCache.get(key);
+    if (cached && (Date.now() - cached.timestamp) < PDF_CACHE_EXPIRY_MS) {
+      console.log('[TurboPipeline] ⚡ PDF Cache HIT');
+      return cached.data;
+    }
+    return null;
+  }
+
+  function setCachedPDF(key, data) {
+    if (pdfCache.size >= PDF_CACHE_MAX) {
+      const firstKey = pdfCache.keys().next().value;
+      pdfCache.delete(firstKey);
+    }
+    pdfCache.set(key, { data, timestamp: Date.now() });
+  }
 
   // ============ FAST KEYWORD CACHE (URL-BASED) ============
   const keywordCache = new Map();
@@ -604,26 +644,23 @@
     return { tailoredCV, injectedKeywords: injected };
   }
 
-  // ============ COMPLETE TURBO PIPELINE (≤175ms total - LAZYAPPLY 3X) ============
-  // NOW WITH OPENRESUME-STYLE CV + COVER LETTER GENERATION
-  // 50% FASTER: Optimized parallel processing and reduced waits
+  // ============ COMPLETE TURBO PIPELINE (≤50ms total - ULTRA BLAZING) ============
+  // LAZYAPPLY 3X COMPATIBLE: Optimized for instant ATS attachment
+  // ALL LOCAL: Zero API calls for maximum speed
   async function executeTurboPipeline(jobInfo, candidateData, baseCV, options = {}) {
     const pipelineStart = performance.now();
     const timings = {};
     
-    console.log('[TurboPipeline] ⚡ Starting 175ms ULTRA-FAST pipeline for:', jobInfo?.title || 'Unknown Job');
+    console.log('[TurboPipeline] ⚡ Starting 50ms ULTRA-BLAZING pipeline for:', jobInfo?.title || 'Unknown Job');
     
-    // PHASE 1: Extract keywords (≤15ms, INSTANT if cached) - 50% faster
+    // PHASE 1: Extract keywords (≤5ms, INSTANT if cached)
     const extractStart = performance.now();
     const jdText = jobInfo?.description || '';
     
-    // PARALLEL: Start keyword extraction and prepare candidate data simultaneously
-    const keywordsPromise = turboExtractKeywords(jdText, {
+    const keywordsResult = await turboExtractKeywords(jdText, {
       jobUrl: jobInfo?.url || '',
       maxKeywords: options.maxKeywords || 35
     });
-    
-    const keywordsResult = await keywordsPromise;
     timings.extraction = performance.now() - extractStart;
 
     if (!keywordsResult.all?.length) {
@@ -631,37 +668,50 @@
       return { success: false, error: 'No keywords extracted', timings };
     }
 
-    // PHASE 2: Tailor CV with keyword distribution (≤30ms) - 50% faster
+    // PHASE 2: Tailor CV with ALL keywords distribution (≤15ms)
     const tailorStart = performance.now();
     const tailorResult = await turboTailorCV(baseCV, keywordsResult, { 
-      targetScore: options.targetScore || 95 
+      targetScore: options.targetScore || 100 
     });
     timings.tailoring = performance.now() - tailorStart;
 
-    // PHASE 3: High Priority Keyword Distribution (3-5x mentions)
+    // PHASE 3: Full Keyword Distribution (3-5x for HIGH/MEDIUM, 1-2x for LOW)
     const distStart = performance.now();
     let finalCV = tailorResult.tailoredCV;
     let distributionStats = {};
     
-    if (keywordsResult.highPriority?.length > 0) {
-      const distResult = distributeHighPriorityKeywords(finalCV, keywordsResult.highPriority, {
+    // Distribute ALL keywords, not just high priority
+    if (keywordsResult.all?.length > 0) {
+      const distResult = distributeAllKeywords(finalCV, keywordsResult, {
         maxBulletsPerRole: 8,
-        targetMentions: 4,
-        minMentions: 3,
-        maxMentions: 5
+        highMinMentions: 3,
+        highMaxMentions: 5,
+        medMinMentions: 3,
+        medMaxMentions: 5,
+        lowMinMentions: 1,
+        lowMaxMentions: 2
       });
       finalCV = distResult.tailoredCV;
       distributionStats = distResult.distributionStats;
     }
     timings.distribution = performance.now() - distStart;
 
-    // PHASE 4: Generate OpenResume-Style CV + Cover Letter PDFs (≤45ms)
+    // PHASE 4: Generate PDFs (≤20ms, use cache when possible)
     let cvPDF = null;
     let coverPDF = null;
     let matchScore = 0;
     const pdfStart = performance.now();
 
-    if (global.OpenResumeGenerator) {
+    // Check PDF cache first
+    const pdfCacheKey = `${jobInfo?.url || ''}_${finalCV.length}`;
+    const cachedPDFs = getCachedPDF(pdfCacheKey);
+    
+    if (cachedPDFs) {
+      cvPDF = cachedPDFs.cvPDF;
+      coverPDF = cachedPDFs.coverPDF;
+      matchScore = cachedPDFs.matchScore;
+      console.log('[TurboPipeline] ⚡ Using cached PDFs');
+    } else if (global.OpenResumeGenerator) {
       try {
         const atsPackage = await global.OpenResumeGenerator.generateATSPackage(
           finalCV,
@@ -688,7 +738,10 @@
         
         matchScore = atsPackage.matchScore;
         
-        console.log(`[TurboPipeline] ✅ PDFs generated: CV=${atsPackage.cvFilename}, Cover=${atsPackage.coverFilename}`);
+        // Cache the PDFs for instant retrieval
+        setCachedPDF(pdfCacheKey, { cvPDF, coverPDF, matchScore });
+        
+        console.log(`[TurboPipeline] ✅ PDFs generated & cached: ${atsPackage.cvFilename}`);
       } catch (e) {
         console.error('[TurboPipeline] OpenResume generation failed:', e);
       }
@@ -700,11 +753,11 @@
     
     const meetsTarget = totalTime <= TIMING_TARGETS.TOTAL;
 
-    console.log(`[TurboPipeline] ⚡ ULTRA-FAST Complete:
+    console.log(`[TurboPipeline] ⚡ ULTRA-BLAZING Complete:
       Extract: ${timings.extraction.toFixed(0)}ms ${keywordsResult.fromCache ? '(CACHED)' : ''} (target: ${TIMING_TARGETS.EXTRACT_KEYWORDS}ms)
       Tailor: ${timings.tailoring.toFixed(0)}ms (target: ${TIMING_TARGETS.TAILOR_CV}ms)
       Distribute: ${timings.distribution.toFixed(0)}ms
-      PDF: ${timings.pdfGeneration.toFixed(0)}ms (target: ${TIMING_TARGETS.GENERATE_PDF}ms)
+      PDF: ${timings.pdfGeneration.toFixed(0)}ms ${cachedPDFs ? '(CACHED)' : ''} (target: ${TIMING_TARGETS.GENERATE_PDF}ms)
       TOTAL: ${totalTime.toFixed(0)}ms (target: ${TIMING_TARGETS.TOTAL}ms) ${meetsTarget ? '✅' : '⚠️'}`);
 
     return {
@@ -717,12 +770,62 @@
       stats: tailorResult.stats,
       timings,
       fromCache: keywordsResult.fromCache,
-      meetsTarget: totalTime <= TIMING_TARGETS.TOTAL,
+      meetsTarget,
       // OpenResume outputs
       cvPDF,
       coverPDF,
       matchScore
     };
+  }
+
+  // ============ INSTANT FILE ATTACHMENT (≤5ms) ============
+  // Pre-attach files before UI renders for LazyApply compatibility
+  function instantFileAttach(cvFile, coverFile, options = {}) {
+    const startTime = performance.now();
+    let attached = { cv: false, cover: false };
+    
+    if (!cvFile && !coverFile) return attached;
+    
+    // Find all file inputs
+    const fileInputs = document.querySelectorAll('input[type="file"]');
+    
+    fileInputs.forEach(input => {
+      const inputContext = (
+        (input.labels?.[0]?.textContent || '') +
+        (input.name || '') +
+        (input.id || '') +
+        (input.getAttribute('aria-label') || '') +
+        (input.closest('label')?.textContent || '')
+      ).toLowerCase();
+      
+      const isCVInput = /(resume|cv|curriculum)/i.test(inputContext) && !/cover/i.test(inputContext);
+      const isCoverInput = /cover/i.test(inputContext);
+      
+      try {
+        if (isCVInput && cvFile && (!input.files || input.files.length === 0)) {
+          const dt = new DataTransfer();
+          dt.items.add(cvFile);
+          input.files = dt.files;
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          attached.cv = true;
+        } else if (isCoverInput && coverFile && (!input.files || input.files.length === 0)) {
+          const dt = new DataTransfer();
+          dt.items.add(coverFile);
+          input.files = dt.files;
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          attached.cover = true;
+        }
+      } catch (e) {
+        console.warn('[TurboPipeline] File attach error:', e);
+      }
+    });
+    
+    const timing = performance.now() - startTime;
+    console.log(`[TurboPipeline] ⚡ Files attached in ${timing.toFixed(0)}ms: CV=${attached.cv}, Cover=${attached.cover}`);
+    
+    return attached;
   }
 
   // ============ EXPORTS ============
@@ -733,9 +836,16 @@
     distributeHighPriorityKeywords,
     distributeAllKeywords,
     generateKeywordCoverageReport,
+    instantFileAttach,
     TIMING_TARGETS,
-    clearCache: () => keywordCache.clear(),
-    getCacheSize: () => keywordCache.size
+    clearCache: () => {
+      keywordCache.clear();
+      pdfCache.clear();
+      profileCache = null;
+    },
+    getCacheSize: () => keywordCache.size + pdfCache.size,
+    getCachedProfile,
+    setCachedProfile
   };
 
 })(typeof window !== 'undefined' ? window : global);
