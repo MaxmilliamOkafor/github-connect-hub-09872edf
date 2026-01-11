@@ -37,7 +37,7 @@
     ['datadoghq.com', 'Datadog'], ['unity.com', 'Unity'], ['udemy.com', 'Udemy'],
     
     // Social & Media
-    ['linkedin.com', 'LinkedIn'], ['tiktok.com', 'TikTok'], ['bytedance.com', 'ByteDance'],
+    ['tiktok.com', 'TikTok'], ['bytedance.com', 'ByteDance'],
     ['snap.com', 'Snapchat'], ['dropbox.com', 'Dropbox'], ['bloomberg.com', 'Bloomberg'],
     
     // Hardware & Semiconductors
@@ -144,7 +144,7 @@
     'google.com', 'meta.com', 'amazon.com', 'microsoft.com', 'apple.com',
     'salesforce.com', 'ibm.com', 'adobe.com', 'stripe.com', 'hubspot.com',
     'intel.com', 'servicenow.com', 'workhuman.com', 'intercom.com', 'paypal.com',
-    'tiktok.com', 'linkedin.com', 'dropbox.com', 'twilio.com', 'datadoghq.com',
+    'tiktok.com', 'dropbox.com', 'twilio.com', 'datadoghq.com',
     'toasttab.com', 'zendesk.com', 'docusign.com', 'fidelity.com', 'sap.com',
     'morganstanley.com', 'kpmg.com', 'deloitte.com', 'accenture.com', 'pwc.com',
     'ey.com', 'citadel.com', 'janestreet.com', 'sig.com', 'twosigma.com',
