@@ -39,7 +39,7 @@
     "https://*.intercom.com/*",
     "https://*.paypal.com/*",
     "https://*.tiktok.com/*",
-    "https://*.linkedin.com/*",
+    
     "https://*.dropbox.com/*",
     "https://*.twilio.com/*",
     "https://*.datadoghq.com/*",
@@ -134,7 +134,7 @@
         "https://*.intercom.com/careers/*",
         "https://*.paypal.com/us/webapps/mpp/jobs/*",
         "https://*.tiktok.com/careers/*",
-        "https://*.linkedin.com/jobs/*",
+        
         "https://*.dropbox.com/jobs/*",
         "https://*.twilio.com/company/jobs/*",
         "https://*.datadoghq.com/careers/*",
