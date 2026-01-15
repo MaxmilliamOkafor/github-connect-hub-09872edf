@@ -424,8 +424,14 @@ class ATSTailor {
     document.getElementById('resumeBulkBtn')?.addEventListener('click', () => this.resumeBulkAutomation());
     document.getElementById('stopBulkBtn')?.addEventListener('click', () => this.stopBulkAutomation());
     
-    // Start bulk progress polling
-    this.startBulkProgressPolling();
+    // Start bulk progress polling (safely)
+    try {
+      if (typeof this.startBulkProgressPolling === 'function') {
+        this.startBulkProgressPolling();
+      }
+    } catch (e) {
+      console.warn('[ATS Tailor] Could not start bulk polling:', e);
+    }
     
     // View Extracted Keywords Button (fast local extraction)
     document.getElementById('viewKeywordsBtn')?.addEventListener('click', () => this.viewExtractedKeywords());
