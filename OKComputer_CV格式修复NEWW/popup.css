@@ -149,6 +149,11 @@ body::-webkit-scrollbar-thumb {
   color: var(--kimi-color);
 }
 
+/* AI Provider Toggle - OLD TOGGLE-SWITCH STYLES REMOVED 
+   The toggle-slider was using position: absolute which caused 
+   it to expand to fill the viewport. Now using safer styles in .toggle-label section */
+
+/*
 .toggle-switch {
   position: relative;
   width: 32px;
@@ -192,6 +197,7 @@ body::-webkit-scrollbar-thumb {
 .toggle-switch input:checked + .toggle-slider:before {
   transform: translateX(16px);
 }
+*/
 
 /* Status Indicator */
 .status-indicator {
@@ -402,7 +408,49 @@ body::-webkit-scrollbar-thumb {
 .toggle-label {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
+  cursor: pointer;
+  position: relative;
+}
+
+/* Toggle slider wrapper inside toggle-label */
+.toggle-label .toggle-slider {
+  position: relative;
+  width: 40px;
+  height: 20px;
+  min-width: 40px;
+  min-height: 20px;
+  max-width: 40px;
+  max-height: 20px;
+  background: var(--border-subtle);
+  border-radius: var(--radius-full);
+  transition: var(--transition-normal);
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+.toggle-label .toggle-slider:before {
+  content: "";
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  left: 2px;
+  top: 2px;
+  background: white;
+  border-radius: 50%;
+  transition: var(--transition-normal);
+}
+
+.toggle-label input[type="checkbox"] {
+  display: none;
+}
+
+.toggle-label input[type="checkbox"]:checked + .toggle-slider {
+  background: var(--accent-secondary);
+}
+
+.toggle-label input[type="checkbox"]:checked + .toggle-slider:before {
+  transform: translateX(20px);
 }
 
 .setting-icon {
@@ -1979,47 +2027,6 @@ body::-webkit-scrollbar-thumb {
   color: var(--kimi-color);
 }
 
-.toggle-switch {
-  position: relative;
-  display: inline-block;
-  width: 36px;
-  height: 18px;
-}
-
-.toggle-switch input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-
-.toggle-slider {
-  position: absolute;
-  cursor: pointer;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: var(--openai-color);
-  border-radius: var(--radius-full);
-  transition: var(--transition-fast);
-}
-
-.toggle-slider:before {
-  position: absolute;
-  content: "";
-  height: 14px;
-  width: 14px;
-  left: 2px;
-  bottom: 2px;
-  background: white;
-  border-radius: 50%;
-  transition: var(--transition-fast);
-}
-
-.toggle-switch input:checked + .toggle-slider {
-  background: var(--kimi-color);
-}
-
-.toggle-switch input:checked + .toggle-slider:before {
-  transform: translateX(18px);
-}
+/* REMOVED: Duplicate toggle-switch styles that caused green overlay bug
+   These were using position: absolute with top/left/right/bottom: 0 
+   which expanded to fill the viewport when parent lacked position: relative */
