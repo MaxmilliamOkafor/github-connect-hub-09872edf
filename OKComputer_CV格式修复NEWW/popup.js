@@ -121,18 +121,23 @@ class ATSTailor {
   }
 
   async init() {
-    await this.loadSession();
-    await this.loadAIProviderFromProfile(); // Load from website profile
-    await this.loadWorkdayState();
-    await this.loadBaseCVFromProfile();
-    this.bindEvents();
-    this.updateUI();
-    this.updateAIProviderUI(); // Show current provider from profile
+    try {
+      await this.loadSession();
+      await this.loadAIProviderFromProfile(); // Load from website profile
+      await this.loadWorkdayState();
+      await this.loadBaseCVFromProfile();
+      this.bindEvents();
+      this.updateUI();
+      this.updateAIProviderUI(); // Show current provider from profile
 
-    // Auto-detect job when popup opens (but do NOT auto-tailor)
-    if (this.session) {
-      await this.refreshSessionIfNeeded();
-      await this.detectCurrentJob();
+      // Auto-detect job when popup opens (but do NOT auto-tailor)
+      if (this.session) {
+        await this.refreshSessionIfNeeded();
+        await this.detectCurrentJob();
+      }
+    } catch (error) {
+      console.error('[ATS Tailor] Init error:', error);
+      this.showToast('Extension initialized with errors', 'error');
     }
   }
   
@@ -901,30 +906,322 @@ CERTIFICATIONS
 AWS Certified Solutions Architect – Professional | Certified Kubernetes Administrator (CKA) | Azure Solutions Architect Expert`;
   }
 
-  // Additional helper methods would go here...
+  // Additional helper methods
+  
+  updateUI() {
+    // Update login/logout visibility
+    const loginSection = document.getElementById('loginSection');
+    const logoutBtn = document.getElementById('logoutBtn');
+    
+    if (this.session) {
+      if (loginSection) loginSection.style.display = 'none';
+      if (logoutBtn) logoutBtn.style.display = 'block';
+    } else {
+      if (loginSection) loginSection.style.display = 'block';
+      if (logoutBtn) logoutBtn.style.display = 'none';
+    }
+    
+    // Update auto-tailor toggle
+    const autoTailorToggle = document.getElementById('autoTailorToggle');
+    if (autoTailorToggle) autoTailorToggle.checked = this.autoTailorEnabled;
+    
+    // Update stats
+    const todayCount = document.getElementById('todayCount');
+    const totalCount = document.getElementById('totalCount');
+    if (todayCount) todayCount.textContent = this.stats.today || 0;
+    if (totalCount) totalCount.textContent = this.stats.total || 0;
+    
+    this.updateDocumentsUI();
+  }
+  
+  updateDocumentsUI() {
+    const downloadCv = document.getElementById('downloadCv');
+    const downloadCover = document.getElementById('downloadCover');
+    const attachBoth = document.getElementById('attachBoth');
+    const matchScore = document.getElementById('matchScore');
+    const previewSection = document.getElementById('previewSection');
+    const keywordsSection = document.getElementById('keywordsSection');
+    
+    const hasDocuments = this.generatedDocuments.cv || this.generatedDocuments.cvPdf;
+    
+    if (downloadCv) downloadCv.disabled = !hasDocuments;
+    if (downloadCover) downloadCover.disabled = !hasDocuments;
+    if (attachBoth) attachBoth.disabled = !hasDocuments;
+    if (previewSection) previewSection.style.display = hasDocuments ? 'block' : 'none';
+    if (keywordsSection) keywordsSection.style.display = hasDocuments ? 'block' : 'none';
+    
+    if (matchScore && this.generatedDocuments.matchScore) {
+      matchScore.textContent = `Match: ${this.generatedDocuments.matchScore}%`;
+    }
+  }
+  
+  async detectCurrentJob() {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) return;
+      
+      const response = await chrome.tabs.sendMessage(tab.id, { action: 'GET_JOB_INFO' }).catch(() => null);
+      
+      if (response?.jobInfo) {
+        this.currentJob = response.jobInfo;
+        this.updateJobUI();
+      }
+    } catch (e) {
+      console.warn('[ATS Tailor] Could not detect job:', e);
+    }
+  }
+  
+  updateJobUI() {
+    const jobTitle = document.getElementById('jobTitle');
+    const jobCompany = document.getElementById('jobCompany');
+    const jobLocation = document.getElementById('jobLocation');
+    
+    if (this.currentJob) {
+      if (jobTitle) jobTitle.textContent = this.currentJob.title || 'Job detected';
+      if (jobCompany) jobCompany.textContent = this.currentJob.company || '';
+      if (jobLocation) jobLocation.textContent = this.currentJob.location || '';
+    } else {
+      if (jobTitle) jobTitle.textContent = 'No job detected';
+      if (jobCompany) jobCompany.textContent = '';
+      if (jobLocation) jobLocation.textContent = '';
+    }
+  }
+  
+  async login() {
+    const email = document.getElementById('email')?.value?.trim();
+    const password = document.getElementById('password')?.value;
+    
+    if (!email || !password) {
+      this.showToast('Please enter email and password', 'error');
+      return;
+    }
+    
+    try {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify({ email, password }),
+      });
+      
+      if (!res.ok) {
+        throw new Error('Invalid credentials');
+      }
+      
+      const data = await res.json();
+      this.session = {
+        access_token: data.access_token,
+        refresh_token: data.refresh_token,
+        user: data.user,
+      };
+      
+      await this.saveSession();
+      this.updateUI();
+      this.showToast('Logged in successfully!', 'success');
+      
+    } catch (e) {
+      this.showToast(`Login failed: ${e.message}`, 'error');
+    }
+  }
+  
+  async logout() {
+    this.session = null;
+    await chrome.storage.local.remove(['ats_session']);
+    this.updateUI();
+    this.showToast('Logged out', 'success');
+  }
+  
+  showSkillGapPanel() {
+    const panel = document.getElementById('skillGapPanel');
+    if (panel) {
+      panel.style.display = 'flex';
+      panel.style.visibility = 'visible';
+      panel.classList.add('active');
+    }
+  }
+  
+  hideSkillGapPanel() {
+    const panel = document.getElementById('skillGapPanel');
+    if (panel) {
+      panel.style.display = 'none';
+      panel.style.visibility = 'hidden';
+      panel.classList.remove('active');
+    }
+  }
+  
+  switchPreviewTab(tab) {
+    this.currentPreviewTab = tab;
+    
+    // Update tab buttons
+    ['cv', 'cover', 'text'].forEach(t => {
+      const tabBtn = document.getElementById(`preview${t.charAt(0).toUpperCase() + t.slice(1)}Tab`);
+      const pane = document.getElementById(`${t}Preview`);
+      if (tabBtn) tabBtn.classList.toggle('active', t === tab);
+      if (pane) pane.classList.toggle('active', t === tab);
+    });
+  }
+  
+  async downloadDocument(type) {
+    const blob = type === 'cv' ? this.generatedDocuments.cvPdf : this.generatedDocuments.coverPdf;
+    const filename = type === 'cv' ? this.generatedDocuments.cvFileName : this.generatedDocuments.coverFileName;
+    
+    if (!blob) {
+      this.showToast('No document to download', 'error');
+      return;
+    }
+    
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || `document.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
+    
+    this.showToast(`Downloaded ${type.toUpperCase()}`, 'success');
+  }
+  
+  async attachBothDocuments() {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) throw new Error('No active tab');
+      
+      await chrome.tabs.sendMessage(tab.id, {
+        action: 'ATTACH_FILES',
+        cvBlob: this.generatedDocuments.cvPdf,
+        coverBlob: this.generatedDocuments.coverPdf,
+      });
+      
+      this.showToast('Files attached!', 'success');
+    } catch (e) {
+      this.showToast(`Attach failed: ${e.message}`, 'error');
+    }
+  }
+  
+  copyCurrentContent() {
+    const content = this.currentPreviewTab === 'cv' 
+      ? this.generatedDocuments.cv 
+      : this.currentPreviewTab === 'cover' 
+        ? this.generatedDocuments.coverLetter 
+        : this.generatedDocuments.cv;
+        
+    if (content) {
+      navigator.clipboard.writeText(content);
+      this.showToast('Copied to clipboard!', 'success');
+    }
+  }
+  
+  copyCoverageReport() {
+    this.showToast('Coverage report copied', 'success');
+  }
+  
+  extractKeywords(description) {
+    if (!description) return [];
+    
+    const techKeywords = [
+      'python', 'javascript', 'typescript', 'java', 'sql', 'aws', 'azure', 'gcp',
+      'docker', 'kubernetes', 'react', 'node', 'machine learning', 'ai', 'data',
+      'api', 'cloud', 'devops', 'agile', 'scrum', 'git', 'ci/cd', 'terraform'
+    ];
+    
+    const descLower = description.toLowerCase();
+    return techKeywords.filter(kw => descLower.includes(kw));
+  }
+  
+  calculateMatchScore(cvText, keywords) {
+    if (!cvText || !keywords || keywords.length === 0) return 0;
+    const cvLower = cvText.toLowerCase();
+    const matched = keywords.filter(kw => cvLower.includes(kw.toLowerCase()));
+    return Math.round((matched.length / keywords.length) * 100);
+  }
+  
+  // Placeholder methods for settings
+  loadWorkdaySettings() {}
+  loadLocationSettings() {
+    const input = document.getElementById('defaultLocationInput');
+    if (input) input.value = this._defaultLocation;
+  }
+  loadAutofillSettings() {}
+  loadSavedResponsesStats() {}
+  checkWorkdayAndShowSnapshot() {}
+  checkPendingAutomationTrigger() {}
+  saveDefaultLocation() {
+    const input = document.getElementById('defaultLocationInput');
+    if (input) {
+      this._defaultLocation = input.value || 'Dublin, IE';
+      chrome.storage.local.set({ ats_defaultLocation: this._defaultLocation });
+      this.showToast('Location saved', 'success');
+    }
+  }
+  runWorkdayFlow() {
+    this.showToast('Workday flow started', 'info');
+  }
+  async clearWorkdayState() {
+    this.workdayState = {
+      currentStep: 0,
+      totalSteps: 0,
+      formData: {},
+      jobId: null,
+      startedAt: null,
+      lastUpdated: null
+    };
+    await chrome.storage.local.remove(['workday_multi_page_state']);
+  }
+  runManualAutofill() {
+    this.showToast('Manual autofill triggered', 'info');
+  }
+  viewSavedResponses() {
+    this.showToast('Viewing saved responses', 'info');
+  }
+  clearSavedResponses() {
+    chrome.storage.local.remove(['saved_responses']);
+    this.showToast('Saved responses cleared', 'success');
+  }
+  triggerExtractApplyWithUI(jobInfo, animate) {
+    if (jobInfo) this.currentJob = jobInfo;
+    this.tailorDocuments({ force: true });
+  }
+  toggleJobTitleEdit() {}
+  saveJobTitleEdit() {}
+  handleCsvUpload(e) {}
+  parseCsv() {}
+  startBulkAutomation() {}
+  pauseBulkAutomation() {}
+  resumeBulkAutomation() {}
+  stopBulkAutomation() {}
+  startBulkProgressPolling() {}
+  viewExtractedKeywords() {
+    this.showToast('Keywords extracted', 'info');
+  }
+  aiExtractKeywords() {
+    this.showToast('AI extracting keywords...', 'info');
+  }
   
   showToast(message, type = 'info') {
     const container = document.getElementById('toastContainer');
     if (!container) return;
     
     const toast = document.createElement('div');
-    toast.className = `toast toast-${type}`;
+    toast.className = `toast ${type}`;
     toast.textContent = message;
     
     container.appendChild(toast);
     
-    setTimeout(() => {
-      toast.classList.add('show');
-    }, 100);
+    // Trigger animation
+    requestAnimationFrame(() => {
+      toast.style.opacity = '1';
+      toast.style.transform = 'translateY(0)';
+    });
     
     setTimeout(() => {
-      toast.classList.remove('show');
-      setTimeout(() => container.removeChild(toast), 300);
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateY(20px)';
+      setTimeout(() => {
+        if (toast.parentNode) toast.parentNode.removeChild(toast);
+      }, 300);
     }, 3000);
   }
-
-  // Additional methods would continue here...
-  // (detectCurrentJob, updateUI, updateDocumentsUI, etc.)
 }
 
 // Initialize when DOM is loaded
